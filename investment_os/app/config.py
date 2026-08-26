@@ -8,18 +8,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    openai_api_key: str
     alpha_vantage_api_key: str | None = None
     fmp_api_key: str | None = None
     sec_user_agent: str = "InvestmentResearchOS contact@example.com"
-    openai_model: str = "gpt-4.1-mini"
-    openai_cio_model: str = "gpt-5.6-sol"
-    openai_risk_model: str = "gpt-5.6-sol"
     database_path: Path = Path("database/investment.db")
     bigfish_database_url: str | None = None
     bigfish_database_path: Path = Path("database/bigfish.db")
     bigfish_environment: str = "development"
-    chroma_path: Path = Path("memory/chroma")
     reports_path: Path = Path("reports/generated")
     portfolio_single_position_alert_pct: float = 20.0
     portfolio_top_two_alert_pct: float = 45.0

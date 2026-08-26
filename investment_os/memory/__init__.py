@@ -1,1 +1,0 @@
-"""Semantic thesis memory."""

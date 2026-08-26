@@ -1,1 +1,1 @@
-"""Tools exposed to investment agents."""
+"""Deterministic market-data and valuation tools."""

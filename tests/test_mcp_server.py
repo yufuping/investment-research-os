@@ -1,7 +1,5 @@
 import json
 from pathlib import Path
-import subprocess
-from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -53,52 +51,10 @@ def test_fetch_rejects_paths_outside_reports(tmp_path, monkeypatch):
         mcp_server.fetch("../secret.md")
 
 
-def test_start_research_async_requires_explicit_cost_confirmation(monkeypatch):
-    with pytest.raises(ValueError, match="API 费用"):
-        mcp_server.start_research_async("NVDA", confirm_api_cost=False)
-
-    class FakeManager:
-        def start_research(self, ticker, question):
-            return mcp_server.TaskState("task-1", "research", "queued", "已排队", ticker=ticker)
-
-    monkeypatch.setattr(mcp_server, "task_manager", FakeManager())
-    result = mcp_server.start_research_async("nvda", "ASIC", confirm_api_cost=True)
-    assert result["task_id"] == "task-1"
-    assert result["ticker"] == "NVDA"
-
-
-def test_task_manager_can_start_without_deadlocking(tmp_path, monkeypatch):
+def test_daily_update_task_can_start_and_be_cancelled(tmp_path, monkeypatch):
     manager = mcp_server.PluginTaskManager(tmp_path)
     monkeypatch.setattr(manager.executor, "submit", lambda *args, **kwargs: None)
-
-    task = manager.start_research("META", "")
-
-    assert task.status == "queued"
-    assert manager.list()[0].task_id == task.task_id
-
-
-def test_failed_worker_releases_active_task(tmp_path, monkeypatch):
-    manager = mcp_server.PluginTaskManager(tmp_path)
-    monkeypatch.setattr(
-        manager,
-        "_run_command",
-        lambda *args, **kwargs: subprocess.CompletedProcess([], 1, "", "模拟失败"),
-    )
-
-    first = manager.start_research("META", "")
-    manager.executor.shutdown(wait=True)
-
-    assert manager.get(first.task_id).status == "failed"
-    replacement_manager = mcp_server.PluginTaskManager(tmp_path)
-    replacement_manager.tasks = manager.tasks
-    monkeypatch.setattr(replacement_manager.executor, "submit", lambda *args, **kwargs: None)
-    assert replacement_manager.start_research("NVDA", "").status == "queued"
-
-
-def test_cancel_task_releases_queue(tmp_path, monkeypatch):
-    manager = mcp_server.PluginTaskManager(tmp_path)
-    monkeypatch.setattr(manager.executor, "submit", lambda *args, **kwargs: None)
-    task = manager.start_research("META", "")
+    task = manager.start_daily_update()
 
     cancelled = manager.cancel(task.task_id)
 
@@ -106,111 +62,17 @@ def test_cancel_task_releases_queue(tmp_path, monkeypatch):
     assert manager.start_daily_update().status == "queued"
 
 
-def test_generate_research_report_waits_and_fetches_full_report(monkeypatch):
-    class FakeManager:
-        def start_research(self, ticker, question):
-            return mcp_server.TaskState("task-meta", "research", "running", "运行中", ticker=ticker)
-
-        def wait(self, task_id, timeout):
-            return mcp_server.TaskState(
-                task_id,
-                "research",
-                "completed",
-                "完成",
-                ticker="META",
-                report_id="generated/META-最新.md",
-            )
-
-    monkeypatch.setattr(mcp_server, "task_manager", FakeManager())
-    monkeypatch.setattr(
-        mcp_server,
-        "fetch",
-        lambda report_id: json.dumps({"id": report_id, "title": "META完整研报", "text": "# META\n\n## 财务质量\n\nRevenue与FCF"}, ensure_ascii=False),
-    )
-
-    result = mcp_server.generate_research_report("meta", confirm_api_cost=True, max_wait_seconds=30)
-
-    assert result["status"] == "completed"
-    assert "财务质量" in result["report"]["text"]
-    assert result["report_id"] == "generated/META-最新.md"
-
-
-def test_generate_research_report_returns_failure_without_waiting_forever(monkeypatch):
-    class FakeManager:
-        def start_research(self, ticker, question):
-            return mcp_server.TaskState("task-meta", "research", "running", "运行中", ticker=ticker)
-
-        def wait(self, task_id, timeout):
-            return mcp_server.TaskState(task_id, "research", "failed", "研究失败", ticker="META", error="模型调用失败")
-
-    monkeypatch.setattr(mcp_server, "task_manager", FakeManager())
-    with pytest.raises(RuntimeError, match="模型调用失败"):
-        mcp_server.generate_research_report("META", confirm_api_cost=True, max_wait_seconds=30)
-
-
-def test_stale_running_task_is_recovered_and_allows_retry(tmp_path, monkeypatch):
-    manager = mcp_server.PluginTaskManager(tmp_path)
-    stale = mcp_server.TaskState(
-        "stale-meta",
-        "research",
-        "running",
-        "运行中",
-        ticker="META",
-        created_at=(datetime.now(UTC) - timedelta(minutes=10)).isoformat(),
-        heartbeat_at=(datetime.now(UTC) - timedelta(minutes=10)).isoformat(),
-    )
-    manager.tasks[stale.task_id] = stale
-    monkeypatch.setattr(manager.executor, "submit", lambda *args, **kwargs: None)
-
-    replacement = manager.start_research("META", "")
-
-    assert manager.get(stale.task_id).status == "failed"
-    assert replacement.task_id != stale.task_id
-
-
-def test_duplicate_same_ticker_request_reuses_active_task(tmp_path, monkeypatch):
+def test_duplicate_daily_update_reuses_active_task(tmp_path, monkeypatch):
     manager = mcp_server.PluginTaskManager(tmp_path)
     monkeypatch.setattr(manager.executor, "submit", lambda *args, **kwargs: None)
 
-    first = manager.start_research("META", "AI资本开支")
-    second = manager.start_research("META", "AI资本开支")
+    first = manager.start_daily_update()
+    second = manager.start_daily_update()
 
     assert second.task_id == first.task_id
     assert second.reused is True
 
 
-def test_different_tickers_do_not_block_each_other(tmp_path, monkeypatch):
-    manager = mcp_server.PluginTaskManager(tmp_path)
-    monkeypatch.setattr(manager.executor, "submit", lambda *args, **kwargs: None)
-
-    meta = manager.start_research("META", "")
-    nvda = manager.start_research("NVDA", "")
-
-    assert meta.task_id != nvda.task_id
-    assert {task.ticker for task in manager.list() if task.status == "queued"} == {"META", "NVDA"}
-
-
-def test_latest_report_falls_back_to_timestamped_markdown(tmp_path, monkeypatch):
-    generated = tmp_path / "generated"
-    generated.mkdir()
-    report = generated / "META-20260824T061111Z.md"
-    report.write_text("# META完整研报", encoding="utf-8")
-    monkeypatch.setattr(mcp_server, "REPORTS_ROOT", tmp_path.resolve())
-
-    assert mcp_server.latest_report_id("META") == "generated/META-20260824T061111Z.md"
-
-
-def test_cached_start_research_name_uses_waiting_tool(monkeypatch):
-    monkeypatch.setattr(
-        mcp_server,
-        "generate_research_report",
-        lambda ticker, question, confirm, wait: {"status": "completed", "ticker": ticker, "report": {"text": "完整正文"}},
-    )
-
-    result = mcp_server.start_research("META", "", True)
-
-    assert result["status"] == "completed"
-    assert result["report"]["text"] == "完整正文"
 def test_company_memory_tools_use_json_service(monkeypatch):
     class FakeKnowledgeService:
         def get_company_memory(self, ticker):
@@ -362,3 +224,17 @@ def test_saved_report_workflow_requires_confirmation_and_chunks_reads(monkeypatc
     assert first["has_more"] is True
     assert first["next_offset"] == 1000
     assert mcp_server.get_saved_report_history("baba")["ticker"] == "BABA"
+
+
+def test_legacy_report_generation_tools_are_not_exposed():
+    tool_names = set(mcp_server.mcp._tool_manager._tools)
+    assert {
+        "generate_research_report",
+        "start_research",
+        "start_research_async",
+    }.isdisjoint(tool_names)
+    assert {
+        "create_report_draft",
+        "append_report_section",
+        "finalize_research_report",
+    }.issubset(tool_names)

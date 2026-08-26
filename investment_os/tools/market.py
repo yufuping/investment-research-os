@@ -4,12 +4,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import yfinance as yf
-from agents import function_tool
 
 from investment_os.database.repository import ResearchRepository
 from investment_os.tools.alpha_vantage import fetch_alpha_vantage
 from investment_os.tools.fmp import fetch_fmp
-from investment_os.tools.sec_edgar import fetch_latest_10k_context, fetch_sec_company_facts
+from investment_os.tools.sec_edgar import fetch_sec_company_facts
 
 
 SOURCE = "SEC EDGAR + FMP；Alpha Vantage 与 Yahoo Finance 仅作备用"
@@ -245,95 +244,3 @@ def prepare_market_snapshot(ticker: str, force_refresh: bool = False) -> dict[st
         )
     _run_snapshots[ticker] = snapshot
     return snapshot
-
-
-def _section(ticker: str, keys: tuple[str, ...]) -> dict[str, Any]:
-    snapshot = prepare_market_snapshot(ticker)
-    return {
-        key: value
-        for key, value in snapshot.items()
-        if key != "数据"
-    } | {
-        "数据": {key: snapshot["数据"].get(key) for key in keys}
-    }
-
-
-@function_tool
-def get_company_profile(ticker: str) -> dict[str, Any]:
-    """从共享快照获取公司简介、行业、所属国家和网站，不重复访问数据源。"""
-    return _section(ticker, ("公司名称", "行业板块", "细分行业", "所属国家", "公司网站", "公司简介"))
-
-
-@function_tool
-def get_market_snapshot(ticker: str) -> dict[str, Any]:
-    """从共享快照获取价格、市值和常用估值倍数，不重复访问数据源。"""
-    return _section(ticker, ("交易货币", "当前价格", "价格日期", "市值", "市值_十亿美元", "滚动市盈率", "预期市盈率", "每股收益_TTM", "市销率", "企业价值倍数_EV_EBITDA", "本次实际数据来源", "数据源警告"))
-
-
-@function_tool
-def get_financial_snapshot(ticker: str) -> dict[str, Any]:
-    """从共享快照获取收入、利润率、自由现金流、现金和债务，不重复访问数据源。"""
-    return _section(
-        ticker,
-        (
-            "过去十二个月收入",
-            "收入增长率",
-            "毛利率",
-            "营业利润率",
-            "过去十二个月归母净利润",
-            "自由现金流",
-            "现金总额",
-            "债务总额",
-            "最新申报收入",
-            "最新申报收入_十亿美元",
-            "上年同期收入_十亿美元",
-            "收入同比增长率",
-            "收入申报表类型",
-            "收入期间开始日",
-            "收入报告期结束日",
-            "最新申报净利润",
-            "最新申报净利润_十亿美元",
-            "上年同期净利润_十亿美元",
-            "净利润同比增长率",
-            "净利润申报表类型",
-            "净利润期间开始日",
-            "净利润报告期结束日",
-            "最新申报经营现金流",
-            "最新申报经营现金流_十亿美元",
-            "上年同期经营现金流_十亿美元",
-            "经营现金流同比增长率",
-            "最新申报资本开支",
-            "最新申报资本开支_十亿美元",
-            "上年同期资本开支_十亿美元",
-            "资本开支同比增长率",
-            "计算自由现金流",
-            "计算自由现金流_十亿美元",
-            "上年同期自由现金流_十亿美元",
-            "自由现金流同比增长率",
-            "上年同期期间开始日",
-            "上年同期期间结束日",
-            "现金流期间开始日",
-            "现金流期间结束日",
-            "资产总额",
-            "负债总额",
-            "流通股数",
-            "SEC最新申报日期",
-            "年度财务趋势",
-            "季度财务趋势",
-            "本次实际数据来源",
-            "数据源警告",
-        ),
-    )
-
-
-@function_tool
-def get_sec_filing_context(ticker: str) -> dict[str, Any]:
-    """从 SEC 最新 10-K 获取业务披露、风险因素、申报日期和原文链接。"""
-    try:
-        return {
-            "状态": "成功",
-            "数据来源": "SEC EDGAR 10-K",
-            "数据": fetch_latest_10k_context(ticker, _sec_user_agent),
-        }
-    except Exception as exc:
-        return {"状态": "失败", "数据来源": "SEC EDGAR 10-K", "错误": type(exc).__name__}

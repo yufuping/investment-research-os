@@ -6,7 +6,6 @@ from investment_os.knowledge.database import create_knowledge_repository
 
 def test_local_knowledge_database_persists_between_repositories(tmp_path: Path):
     settings = Settings(
-        openai_api_key="test",
         bigfish_database_path=tmp_path / "bigfish.db",
     )
     first = create_knowledge_repository(settings)
@@ -24,7 +23,6 @@ def test_local_knowledge_database_persists_between_repositories(tmp_path: Path):
 def test_remote_database_does_not_auto_create_schema(monkeypatch, tmp_path: Path):
     remote_file = tmp_path / "remote-simulation.db"
     settings = Settings(
-        openai_api_key="test",
         bigfish_database_url=f"sqlite+pysqlite:///{remote_file}",
     )
     repository = create_knowledge_repository(settings)

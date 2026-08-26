@@ -62,7 +62,7 @@ class TaskState:
 
 
 class PluginTaskManager:
-    """管理后台研究任务；不同股票可并行，同一请求只执行一次。"""
+    """管理不调用大模型的后台维护任务。"""
 
     def __init__(self, project_root: Path = PROJECT_ROOT, max_workers: int = 3, state_path: Path | None = None) -> None:
         self.project_root = project_root
@@ -117,9 +117,6 @@ class PluginTaskManager:
             self._persist_locked()
         return TaskState(**asdict(task))
 
-    def _active_research(self, ticker: str) -> TaskState | None:
-        return next((task for task in self.tasks.values() if task.task_type == "research" and task.ticker == ticker and task.status in {"queued", "running"}), None)
-
     def _recover_stale_locked(self, stale_after_seconds: int = 120) -> None:
         now = datetime.now(UTC)
         changed = False
@@ -162,21 +159,6 @@ class PluginTaskManager:
             self._persist_locked()
             return TaskState(**asdict(task))
 
-    def start_research(self, ticker: str, question: str, request_id: str | None = None) -> TaskState:
-        with self.lock:
-            self._recover_stale_locked()
-            active = self._active_research(ticker)
-            if active is not None:
-                if active.question_digest != self._digest(question):
-                    raise RuntimeError(f"{ticker} 已有另一份研究正在运行，请等待完成或先取消。")
-                attached = TaskState(**asdict(active))
-                attached.reused = True
-                attached.message = f"已复用正在运行的 {ticker} 研究任务，不会重复产生费用。"
-                return attached
-        task = self._create("research", "完整研究已排队。", ticker, question, request_id)
-        self.executor.submit(self._run_research, task.task_id, ticker, question)
-        return task
-
     def start_daily_update(self) -> TaskState:
         with self.lock:
             active = next((task for task in self.tasks.values() if task.task_type == "daily_update" and task.status in {"queued", "running"}), None)
@@ -203,20 +185,6 @@ class PluginTaskManager:
                 setattr(task, key, value)
             self._persist_locked()
 
-    def wait(self, task_id: str, timeout: int = 1200) -> TaskState:
-        deadline = time.monotonic() + timeout
-        delays = (2, 3, 5)
-        index = 0
-        while True:
-            task = self.get(task_id)
-            if task.status in {"completed", "failed", "cancelled"}:
-                return task
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"{task.ticker or '任务'} 在 {timeout} 秒内尚未完成，后台任务仍在继续。")
-            time.sleep(min(delays[min(index, len(delays) - 1)], remaining))
-            index += 1
-
     def _run_command(self, task_id: str, command: list[str], timeout: int = 3600) -> subprocess.CompletedProcess[str]:
         process = subprocess.Popen(command, cwd=self.project_root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         with self.lock:
@@ -242,39 +210,10 @@ class PluginTaskManager:
             with self.lock:
                 self.processes.pop(task_id, None)
 
-    def _run_research(self, task_id: str, ticker: str, question: str) -> None:
-        try:
-            if self.get(task_id).status == "cancelled":
-                return
-            now = datetime.now(UTC).isoformat()
-            self._update(task_id, status="running", message=f"正在生成 {ticker} 完整研究报告。", started_at=now, heartbeat_at=now)
-            command = [sys.executable, "-m", "investment_os.app.main", ticker]
-            if question:
-                command.extend(["--question", question])
-            result = self._run_command(task_id, command)
-            if self.get(task_id).status == "cancelled":
-                return
-            if result.returncode == 0:
-                report_id = latest_report_id(ticker)
-                self._update(
-                    task_id,
-                    status="completed",
-                    message=f"{ticker} 完整研究报告已生成。",
-                    report_id=report_id,
-                    completed_at=datetime.now(UTC).isoformat(),
-                )
-            else:
-                error = (result.stderr or result.stdout or "未知错误").strip().splitlines()[-1]
-                self._update(task_id, status="failed", message=f"研究失败：{error[:500]}", error=error[:500], completed_at=datetime.now(UTC).isoformat())
-        except Exception as exc:
-            if self.get(task_id).status != "cancelled":
-                self._update(task_id, status="failed", message=f"研究失败：{str(exc)[:500]}", error=str(exc)[:500], completed_at=datetime.now(UTC).isoformat())
-
     def _run_daily_update(self, task_id: str) -> None:
         steps = [
             ("正在备份投资数据库。", [sys.executable, "-m", "investment_os.app.backup"]),
             ("正在刷新组合综合复核。", [sys.executable, "-m", "investment_os.app.portfolio", "review"]),
-            ("正在快速复核全部观察公司。", [sys.executable, "-m", "investment_os.app.monitor_all"]),
         ]
         try:
             for message, command in steps:
@@ -291,7 +230,7 @@ class PluginTaskManager:
             self._update(
                 task_id,
                 status="completed",
-                message="日常更新完成，组合和观察清单均已刷新。",
+                message="日常更新完成，数据库已备份并刷新组合复核。",
                 report_id="报告中心.html",
                 completed_at=datetime.now(UTC).isoformat(),
             )
@@ -320,29 +259,14 @@ def _report_url(report_id: str) -> str:
     return f"{REPORT_BASE_URL}/{quote(html_id, safe='/')}"
 
 
-def latest_report_id(ticker: str) -> str:
-    target = REPORTS_ROOT / "generated" / f"{ticker.upper()}-最新.md"
-    if not target.is_file():
-        candidates = sorted(
-            (path for path in (REPORTS_ROOT / "generated").glob(f"{ticker.upper()}-*.md") if "-草稿-" not in path.name),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        if not candidates:
-            raise LookupError(f"尚未找到 {ticker.upper()} 的最新完整研报。")
-        target = candidates[0]
-    return str(target.relative_to(REPORTS_ROOT))
-
-
 task_manager = PluginTaskManager()
 mcp = MCPServer(
     name="investment-research-os",
     title="个人投资研究系统",
-    version="0.4.0",
+    version="0.5.0",
     instructions=(
-        "用于检索和生成中文长期投资研究报告。用户要求重新生成完整研报并确认费用时，"
-        "必须优先调用 generate_research_report；该工具会等待任务完成并直接返回全文，不要把 task_id 交给用户管理。"
-        "旧名称 start_research 也会等待并返回全文；start_research_async/get_task_status 仅用于诊断。读取已有报告时先 search 再 fetch。"
+        "用于 Bigfish 长期投资研究的确定性计算、结构化记忆、正式研报保存和已有报告读取。"
+        "后台不调用大模型，也不生成研报；完整研究与写作由当前 ChatGPT 按 Bigfish 方法完成。读取已有文件报告时先 search 再 fetch。"
         "fetch 会按安全长度分段返回；只要 has_more=true，就继续用 next_offset 调用 fetch，直到取得全部正文，再在对话中连续输出。"
         "开始新研究或复核投资逻辑前，优先调用 get_company_memory；只有用户明确要求记住或正式记录时，才调用 save_* 研究记忆工具。"
         "CAGR、隐含利润增长和估值情景必须调用确定性计算工具，不要让语言模型自行心算。"
@@ -862,82 +786,9 @@ def get_saved_report_history(ticker: str, limit: int = 20) -> dict[str, object]:
 
 
 @mcp.tool(
-    name="generate_research_report",
-    title="生成并返回完整投资研究报告",
-    description=(
-        "Use this as the default tool when the user asks to generate or regenerate a full research report and has confirmed OpenAI API charges. "
-        "It starts or reuses the background task, waits for completion, and returns the complete Markdown report in the same tool result."
-    ),
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
-)
-def generate_research_report(
-    ticker: str,
-    question: str = "",
-    confirm_api_cost: bool = False,
-    max_wait_seconds: int = 1200,
-) -> dict[str, object]:
-    symbol = ticker.upper().strip()
-    if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", symbol):
-        raise ValueError("请输入有效的股票代码，例如 META。")
-    if not confirm_api_cost:
-        raise ValueError("生成完整研报会产生 OpenAI API 费用，请取得用户确认后将 confirm_api_cost 设为 true。")
-    wait_seconds = max(30, min(max_wait_seconds, 1800))
-    task = task_manager.start_research(symbol, question.strip())
-    try:
-        completed = task_manager.wait(task.task_id, timeout=wait_seconds)
-    except TimeoutError as exc:
-        return {
-            "status": "timeout",
-            "ticker": symbol,
-            "message": str(exc),
-            "task_id": task.task_id,
-            "reused": task.reused,
-        }
-    if completed.status == "failed":
-        raise RuntimeError(completed.error or completed.message)
-    if completed.status == "cancelled":
-        raise RuntimeError("研究任务已取消。")
-    if not completed.report_id:
-        raise RuntimeError("研究已结束，但没有生成可读取的报告。")
-    report = json.loads(fetch(completed.report_id))
-    return {
-        "status": "completed",
-        "ticker": symbol,
-        "report_id": completed.report_id,
-        "reused": task.reused,
-        "report": report,
-    }
-
-
-@mcp.tool(
-    name="start_research",
-    title="生成并返回完整投资研究报告（兼容入口）",
-    description="Use this to generate a full report. This compatibility entry also waits for completion and returns the complete Markdown report; it must not stop at a running task.",
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
-)
-def start_research(ticker: str, question: str = "", confirm_api_cost: bool = False) -> dict[str, object]:
-    return generate_research_report(ticker, question, confirm_api_cost, 1200)
-
-
-@mcp.tool(
-    name="start_research_async",
-    title="仅启动完整研究（诊断用）",
-    description="Use this low-level diagnostic tool only when explicitly asked to start a background task without waiting for its report.",
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
-)
-def start_research_async(ticker: str, question: str = "", confirm_api_cost: bool = False) -> dict[str, object]:
-    symbol = ticker.upper().strip()
-    if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", symbol):
-        raise ValueError("请输入有效的股票代码，例如 NVDA。")
-    if not confirm_api_cost:
-        raise ValueError("生成完整研报会产生 OpenAI API 费用，请取得用户确认后将 confirm_api_cost 设为 true。")
-    return asdict(task_manager.start_research(symbol, question.strip()))
-
-
-@mcp.tool(
     name="get_task_status",
-    title="查询研究任务状态",
-    description="Use this when the user wants to know whether a previously started research or daily-update task has completed.",
+    title="查询后台维护任务状态",
+    description="Use this when the user wants to know whether a previously started daily-update task has completed.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
 )
 def get_task_status(task_id: str) -> dict[str, object]:
@@ -946,8 +797,8 @@ def get_task_status(task_id: str) -> dict[str, object]:
 
 @mcp.tool(
     name="list_tasks",
-    title="列出研究任务",
-    description="Use this to inspect recent research and daily-update tasks, especially when the service reports that another task is already running.",
+    title="列出后台维护任务",
+    description="Use this to inspect recent daily-update tasks, especially when the service reports that another task is already running.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
 )
 def list_tasks(limit: int = 20) -> dict[str, object]:
@@ -957,8 +808,8 @@ def list_tasks(limit: int = 20) -> dict[str, object]:
 
 @mcp.tool(
     name="cancel_task",
-    title="取消研究任务",
-    description="Use this when the user explicitly asks to cancel a queued or running research or daily-update task.",
+    title="取消后台维护任务",
+    description="Use this when the user explicitly asks to cancel a queued or running daily-update task.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
 )
 def cancel_task(task_id: str) -> dict[str, object]:
@@ -968,7 +819,7 @@ def cancel_task(task_id: str) -> dict[str, object]:
 @mcp.tool(
     name="start_daily_update",
     title="更新全部日常报告",
-    description="Use this when the user asks to back up the database and refresh the portfolio review and all monitoring reports without running full AI research.",
+    description="Use this when the user asks to back up the database and refresh the portfolio review without running any AI research.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
 )
 def start_daily_update() -> dict[str, object]:

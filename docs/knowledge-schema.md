@@ -46,14 +46,17 @@ python -m pytest tests/test_knowledge_models.py -q
 - 新建或更新同名跟踪变量；
 - 只有用户明确确认后才能保存真实投资决策。
 
-这一层没有连接生产数据库。当前 MCP 服务已经提供：
+当前默认使用本地 SQLite。MCP 服务已经提供：
 
 - `get_company_memory`、`search_memory` 两个只读工具；
 - `save_thesis`、`save_assumption`、`save_prediction`、`save_critical_unknown`、`save_watch_variable` 五个研究记忆写入工具。
 - `calculate_cagr`、`calculate_required_profit_growth`、`valuation_scenario_analysis` 三个确定性计算工具。
-- `save_valuation`、`get_valuation_history` 两个估值记忆工具；保存采用追加快照，不覆盖历史。
+- `save_valuation`、`get_valuation_history` 两个估值记忆工具；保存采用追加快照，不覆盖历史；
+- `save_confirmed_decision`、`get_decision_history` 两个真实交易记录工具；只有用户明确确认交易已经发生时才允许写入；
+- `save_discussion_summary`、`get_discussion_history` 两个讨论纪要工具；保存前必须先向用户展示摘要并取得确认；
+- `create_report_draft`、`append_report_section`、`finalize_research_report`、`get_saved_research_report` 和 `get_saved_report_history` 正式研报工具。
 
-买卖决策写入尚未向 MCP 开放，避免把普通研究讨论误记成真实交易。
+后台不调用大模型生成研报。完整研报由当前 ChatGPT 按 Bigfish 方法撰写，用户确认后才分章保存和定稿。
 
 反向估值默认使用五年和13%要求年化回报率。股息率按年化回报贡献处理，属于简化模型；存在可靠逐年分红预测时，应改用逐年现金流计算。
 

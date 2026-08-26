@@ -1,5 +1,7 @@
 # Bigfish Architecture
 
+> **Current implementation (2026-08-26):** The legacy OpenAI Agents SDK report generator and Chroma memory layer have been removed. ChatGPT + Bigfish is the only research and writing layer. The local backend exposes deterministic calculations, SQLite-backed memory, report storage, portfolio tools, and backup/restore. Cloud Run and Neon remain optional future deployment targets rather than current runtime requirements.
+
 ## 1. Purpose
 
 Bigfish is a private, single-user, long-term investment research operating system.

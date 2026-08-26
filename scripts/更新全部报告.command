@@ -26,17 +26,12 @@ echo "② 更新组合综合复核"
 portfolio_status=$?
 echo ""
 
-echo "③ 更新全部观察清单"
-.venv/bin/python -m investment_os.app.monitor_all
-monitor_status=$?
-echo ""
-
-if (( portfolio_status == 0 || monitor_status == 0 )); then
-  echo "④ 打开报告中心"
+if (( portfolio_status == 0 )); then
+  echo "③ 打开报告中心"
   open "reports/报告中心.html"
 fi
 
-if (( backup_status == 0 && portfolio_status == 0 && monitor_status == 0 )); then
+if (( backup_status == 0 && portfolio_status == 0 )); then
   echo ""
   echo "全部更新完成。"
 else
