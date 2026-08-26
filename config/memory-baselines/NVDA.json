@@ -1,0 +1,38 @@
+{
+  "ticker": "NVDA",
+  "company_name": "NVIDIA Corporation",
+  "exchange": "NASDAQ",
+  "source_report": "reports/generated/NVDA-20260824T020751Z.md",
+  "thesis": {
+    "text": "AI算力市场继续扩大，NVIDIA凭借CUDA、全栈软硬件平台、快速产品迭代和网络互联能力，仍能获取较大的产业利润份额；但长期回报取决于公司能否在ASIC竞争和客户议价增强的环境下，同时维持足够的市场份额与利润率。",
+    "confidence": 0.7,
+    "supporting_evidence": [
+      {"type": "事实", "text": "CUDA生态、开发工具、芯片、网络和系统共同形成较高迁移成本。", "source": "reports/generated/NVDA-20260824T020751Z.md"},
+      {"type": "观点", "text": "前沿训练和快速变化的工作负载仍更适合通用GPU与成熟软件生态。", "source": "reports/generated/NVDA-20260824T020751Z.md"}
+    ],
+    "contrary_evidence": [
+      {"type": "事实", "text": "大型云客户持续开发自研ASIC，并具有把稳定推理负载迁移到内部芯片的经济动力。", "source": "reports/generated/NVDA-20260824T020751Z.md"},
+      {"type": "观点", "text": "软件抽象层和可信第二供应来源可能先削弱NVIDIA定价权，再影响市场份额。", "source": "reports/generated/NVDA-20260824T020751Z.md"}
+    ]
+  },
+  "assumptions": [
+    {"description": "未来五年AI外购加速器市场仍保持较快增长。", "impact": "极高", "confidence": 0.7},
+    {"description": "CUDA及全栈系统的实际迁移成本仍然较高。", "impact": "极高", "confidence": 0.75},
+    {"description": "ASIC主要先侵蚀稳定推理负载，不会迅速替代前沿训练。", "impact": "高", "confidence": 0.65},
+    {"description": "网络、系统和软件收入能够抵消部分GPU份额下降。", "impact": "高", "confidence": 0.55},
+    {"description": "长期利润率即使正常化，也不会出现破坏投资逻辑的严重压缩。", "impact": "极高", "confidence": 0.55}
+  ],
+  "critical_unknowns": [
+    {"description": "大型云客户自研ASIC的实际部署量和工作负载迁移比例是多少？", "impact": "极高", "confidence": 0.25},
+    {"description": "CUDA独立软件收入、续约率以及跨平台迁移成本的真实水平是多少？", "impact": "高", "confidence": 0.25},
+    {"description": "GPU与ASIC在不同训练和推理负载下的可比总拥有成本是多少？", "impact": "极高", "confidence": 0.2}
+  ],
+  "watch_variables": [
+    {"name": "数据中心收入相对CSP资本开支", "rationale": "判断NVIDIA是否继续获取AI基础设施增量利润池。"},
+    {"name": "毛利率与经营利润率", "rationale": "识别稀缺溢价和定价权是否开始正常化。"},
+    {"name": "云厂商ASIC部署", "rationale": "跟踪稳定推理负载是否迁离通用GPU。"},
+    {"name": "CUDA迁移成本", "rationale": "验证软件护城河是保持排他性还是退化为兼容优势。"},
+    {"name": "库存、供应预付款和采购承诺", "rationale": "识别需求放缓、提前采购和现金流风险。"},
+    {"name": "产品路线图与每Token成本", "rationale": "验证技术迭代和单位经济性领先是否持续。"}
+  ]
+}

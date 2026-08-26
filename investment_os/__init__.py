@@ -1,0 +1,2 @@
+"""Investment Research OS package."""
+
