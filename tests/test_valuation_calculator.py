@@ -27,3 +27,12 @@ def test_stock_return_calculator_is_a_stock_total_return_tool():
     assert "totalMultiple=priceMultiple*dividendMultiple" in html
     assert "年化总回报" in html
     assert "不是存款或债券利息" in html
+
+
+def test_bigfish_trend_table_requires_operating_profit_growth_and_margin_check():
+    path = Path(__file__).parents[1] / "skills" / "bigfish" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert "五年经营趋势表硬性合同" in text
+    assert "经营利润同比增长" in text
+    assert "经营利润率 = 经营利润 ÷ 营业收入" in text
+    assert "差异超过 0.2 个百分点" in text
