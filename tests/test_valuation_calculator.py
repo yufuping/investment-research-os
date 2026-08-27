@@ -54,3 +54,15 @@ def test_bigfish_return_attribution_has_gaap_and_normalized_bridges():
     assert "GAAP/报告口径分析法" in text
     assert "规范化总回报倍数" in text
     assert "报告口径总回报倍数" in text
+
+
+def test_bigfish_future_growth_uses_operating_profit_bridge_before_pe():
+    skill = Path(__file__).parents[1] / "skills" / "bigfish" / "SKILL.md"
+    method = Path(__file__).parents[1] / "skills" / "bigfish" / "references" / "methodology.md"
+    return_ref = Path(__file__).parents[1] / "skills" / "bigfish" / "references" / "return-attribution.md"
+    skill_text, method_text, return_text = (p.read_text(encoding="utf-8") for p in (skill, method, return_ref))
+    assert "未来增长预测硬性合同" in skill_text
+    assert "经营利润 CAGR = [(1 + 营收 CAGR)^5" in skill_text
+    assert "不得把经营利润 CAGR 直接代入 P/E" in skill_text
+    assert "净利润/经营利润转化率" in method_text
+    assert "未来增长优先从经营利润推导" in return_text
