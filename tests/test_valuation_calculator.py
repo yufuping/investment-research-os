@@ -15,3 +15,15 @@ def test_standalone_valuation_calculator_contains_required_inputs_and_formula():
     assert "未来五年预期年化总回报" in html
     assert "五年后 PE 敏感性" in html
     assert "viewport" in html
+
+
+def test_stock_return_calculator_is_a_stock_total_return_tool():
+    path = Path(__file__).parents[1] / "reports" / "股票投资收益计算器.html"
+    html = path.read_text(encoding="utf-8")
+    for field in ("initialAmount", "buyPrice", "sellPrice", "years", "dividendYield"):
+        assert f'id="{field}"' in html
+    assert "股票投资收益计算器" in html
+    assert "priceMultiple=sell/buy" in html
+    assert "totalMultiple=priceMultiple*dividendMultiple" in html
+    assert "年化总回报" in html
+    assert "不是存款或债券利息" in html
