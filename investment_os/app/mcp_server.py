@@ -263,17 +263,17 @@ task_manager = PluginTaskManager()
 mcp = MCPServer(
     name="investment-research-os",
     title="个人投资研究系统",
-    version="0.5.0",
+    version="0.6.0",
     instructions=(
         "用于 Bigfish 长期投资研究的确定性计算、结构化记忆、正式研报保存和已有报告读取。"
         "后台不调用大模型，也不生成研报；完整研究与写作由当前 ChatGPT 按 Bigfish 方法完成。读取已有文件报告时先 search 再 fetch。"
         "fetch 会按安全长度分段返回；只要 has_more=true，就继续用 next_offset 调用 fetch，直到取得全部正文，再在对话中连续输出。"
-        "开始新研究或复核投资逻辑前，优先调用 get_company_memory；只有用户明确要求记住或正式记录时，才调用 save_* 研究记忆工具。"
+        "开始新研究或复核投资逻辑前，优先调用 get_company_memory；上市公司提供股票代码，未上市公司留空股票代码并提供稳定的公司名称；只有用户明确要求记住或正式记录时，才调用 save_* 研究记忆工具。"
         "CAGR、隐含利润增长和估值情景必须调用确定性计算工具，不要让语言模型自行心算。"
         "只有用户明确要求保存或记住估值时才调用 save_valuation；比较当前与上次估值时先调用 get_valuation_history。"
         "只有用户明确表示交易已经发生并要求正式记录时，才调用 save_confirmed_decision；讨论、计划、建议、估值和假设情景绝不等于成交。"
         "保存交易前必须复述公司、动作、数量及理由并取得确认；数量和仓位是不同字段，不得互相推断。查询历史交易使用 get_decision_history。"
-        "用户要求总结并保存当前股票讨论时，先由 ChatGPT 生成结构化纪要并展示给用户；只有用户确认该摘要后才调用 save_discussion_summary。"
+        "用户要求总结并保存公司讨论时（包括 DeepSeek 等未上市公司），先由 ChatGPT 生成结构化纪要并展示给用户；只有用户确认该摘要后才调用 save_discussion_summary。"
         "讨论纪要不等于正式研报、投资论点或真实交易，不得自动升级为这些记录；历史纪要使用 get_discussion_history 查询。"
         "完整研报由当前 ChatGPT 按 Bigfish 方法生成；用户确认保存后依次调用 create_report_draft、append_report_section 和 finalize_research_report。"
         "后台只保存和读取，不调用模型生成研报。长研报必须分章节保存；读取时使用 get_saved_research_report 并按 next_offset 取完全文。"
@@ -340,16 +340,42 @@ def fetch(id: str, offset: int = 0, max_chars: int = 12000) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _private_entity_key(company_name: str) -> str:
+    normalized = " ".join(company_name.casefold().split())
+    return f"PRIVATE-{hashlib.sha256(normalized.encode('utf-8')).hexdigest()[:12].upper()}"
+
+
+def _memory_identity(ticker: str | None, company_name: str, *, listed_only: bool = False) -> tuple[str, str]:
+    name = company_name.strip()
+    raw_ticker = (ticker or "").strip()
+    if raw_ticker:
+        symbol = raw_ticker.upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", symbol):
+            raise ValueError("请输入有效的股票代码，例如 NVDA；未上市公司请留空股票代码并填写公司名称。")
+    else:
+        if listed_only:
+            raise ValueError("该工具只适用于上市公司，请提供股票代码。")
+        if not name:
+            raise ValueError("公司名称不能为空；上市公司还可以同时提供股票代码。")
+        symbol = _private_entity_key(name)
+    if not name:
+        raise ValueError("公司名称不能为空。")
+    return symbol, name
+
+
+def _lookup_identity(ticker: str | None, company_name: str | None = None) -> str:
+    symbol, _ = _memory_identity(ticker, company_name or (ticker or ""))
+    return symbol
+
+
 @mcp.tool(
     name="get_company_memory",
     title="读取公司投资记忆",
-    description="Use this before new research or an investment-logic review to retrieve the company's saved theses, assumptions, predictions, critical unknowns, watch variables, and confirmed decisions.",
+    description="Use this before new research or an investment-logic review. For a listed company provide ticker; for an unlisted company such as DeepSeek leave ticker empty and provide company_name.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
 )
-def get_company_memory(ticker: str) -> dict[str, object]:
-    symbol = ticker.upper().strip()
-    if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", symbol):
-        raise ValueError("请输入有效的股票代码，例如 NVDA。")
+def get_company_memory(ticker: str | None = None, company_name: str | None = None) -> dict[str, object]:
+    symbol = _lookup_identity(ticker, company_name)
     return knowledge_service().get_company_memory(symbol)
 
 
@@ -359,21 +385,9 @@ def get_company_memory(ticker: str) -> dict[str, object]:
     description="Use this to search saved theses, assumptions, predictions, critical unknowns, and watch variables by keyword, optionally within one ticker.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
 )
-def search_memory(query: str, ticker: str | None = None, limit: int = 20) -> dict[str, object]:
-    symbol = ticker.upper().strip() if ticker else None
-    if symbol and not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", symbol):
-        raise ValueError("请输入有效的股票代码，例如 NVDA。")
+def search_memory(query: str, ticker: str | None = None, limit: int = 20, company_name: str | None = None) -> dict[str, object]:
+    symbol = _lookup_identity(ticker, company_name) if ticker or company_name else None
     return knowledge_service().search_memory(query, ticker=symbol, limit=limit)
-
-
-def _memory_identity(ticker: str, company_name: str) -> tuple[str, str]:
-    symbol = ticker.upper().strip()
-    name = company_name.strip()
-    if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", symbol):
-        raise ValueError("请输入有效的股票代码，例如 NVDA。")
-    if not name:
-        raise ValueError("公司名称不能为空。")
-    return symbol, name
 
 
 def _confidence(value: float | None) -> Decimal | None:
@@ -387,9 +401,9 @@ def _confidence(value: float | None) -> Decimal | None:
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
 )
 def save_thesis(
-    ticker: str,
-    company_name: str,
-    thesis: str,
+    ticker: str | None = None,
+    company_name: str = "",
+    thesis: str = "",
     confidence: float | None = None,
     supersedes_thesis_id: str | None = None,
 ) -> dict[str, object]:
@@ -410,7 +424,7 @@ def save_thesis(
     description="Save a high-impact assumption after the user asks to remember or formally record it. Use confidence from 0 to 1.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
 )
-def save_assumption(ticker: str, company_name: str, description: str, impact: str, confidence: float | None = None) -> dict[str, object]:
+def save_assumption(ticker: str | None = None, company_name: str = "", description: str = "", impact: str = "", confidence: float | None = None) -> dict[str, object]:
     symbol, name = _memory_identity(ticker, company_name)
     return knowledge_service().save_assumption(symbol, name, description, impact, confidence=_confidence(confidence))
 
@@ -421,7 +435,7 @@ def save_assumption(ticker: str, company_name: str, description: str, impact: st
     description="Save a meaningful falsifiable prediction when the user asks to remember or track it. Do not store vague opinions as predictions.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
 )
-def save_prediction(ticker: str, company_name: str, prediction: str, confidence: float | None = None) -> dict[str, object]:
+def save_prediction(ticker: str | None = None, company_name: str = "", prediction: str = "", confidence: float | None = None) -> dict[str, object]:
     symbol, name = _memory_identity(ticker, company_name)
     return knowledge_service().save_prediction(symbol, name, prediction, confidence=_confidence(confidence))
 
@@ -432,7 +446,7 @@ def save_prediction(ticker: str, company_name: str, prediction: str, confidence:
     description="Save an unresolved, high-impact question that could change the investment conclusion.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
 )
-def save_critical_unknown(ticker: str, company_name: str, description: str, impact: str, confidence: float | None = None) -> dict[str, object]:
+def save_critical_unknown(ticker: str | None = None, company_name: str = "", description: str = "", impact: str = "", confidence: float | None = None) -> dict[str, object]:
     symbol, name = _memory_identity(ticker, company_name)
     return knowledge_service().save_critical_unknown(symbol, name, description, impact, confidence=_confidence(confidence))
 
@@ -444,10 +458,10 @@ def save_critical_unknown(ticker: str, company_name: str, description: str, impa
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
 )
 def save_watch_variable(
-    ticker: str,
-    company_name: str,
-    name: str,
-    rationale: str,
+    ticker: str | None = None,
+    company_name: str = "",
+    name: str = "",
+    rationale: str = "",
     current_assessment: str | None = None,
 ) -> dict[str, object]:
     symbol, company = _memory_identity(ticker, company_name)
@@ -529,7 +543,7 @@ def save_valuation(
 ) -> dict[str, object]:
     if not confirm_save:
         raise ValueError("保存正式估值会修改投资记忆库；只有用户明确要求保存时，才能将 confirm_save 设为 true。")
-    symbol, name = _memory_identity(ticker, company_name)
+    symbol, name = _memory_identity(ticker, company_name, listed_only=True)
     return knowledge_service().save_valuation(
         symbol,
         name,
@@ -589,7 +603,7 @@ def save_confirmed_decision(
 ) -> dict[str, object]:
     if not confirm_transaction:
         raise ValueError("这会写入真实投资决策；必须先向用户复述交易细节并取得明确确认，然后才能将 confirm_transaction 设为 true。")
-    symbol, name = _memory_identity(ticker, company_name)
+    symbol, name = _memory_identity(ticker, company_name, listed_only=True)
     if quantity is None and position_weight_pct is None:
         raise ValueError("必须至少提供真实成交数量或确认后的组合仓位比例；不得从讨论内容推断。")
     return knowledge_service().save_confirmed_decision(
@@ -632,16 +646,16 @@ def get_decision_history(ticker: str, limit: int = 20) -> dict[str, object]:
     name="save_discussion_summary",
     title="保存已确认的公司讨论纪要",
     description=(
-        "Use this when the user asks to preserve a stock discussion. First summarize the current conversation, show the complete structured summary, "
+        "Use this when the user asks to preserve a company discussion, including an unlisted company. First summarize the current conversation, show the complete structured summary, "
         "and obtain explicit confirmation. Save only the distilled summary, not a raw chat transcript. This does not record a trade or replace a formal thesis."
     ),
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
 )
 def save_discussion_summary(
-    ticker: str,
-    company_name: str,
-    title: str,
-    summary: str,
+    ticker: str | None = None,
+    company_name: str = "",
+    title: str = "",
+    summary: str = "",
     confirm_save: bool = False,
     key_points: list[str] | None = None,
     changed_views: list[str] | None = None,
@@ -676,10 +690,8 @@ def save_discussion_summary(
     description="Use this when the user wants to find or review previously confirmed discussion summaries for a company before continuing research or conducting a retrospective.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
 )
-def get_discussion_history(ticker: str, limit: int = 20) -> dict[str, object]:
-    symbol = ticker.upper().strip()
-    if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", symbol):
-        raise ValueError("请输入有效的股票代码，例如 BABA。")
+def get_discussion_history(ticker: str | None = None, limit: int = 20, company_name: str | None = None) -> dict[str, object]:
+    symbol = _lookup_identity(ticker, company_name)
     return knowledge_service().get_discussion_history(symbol, limit=limit)
 
 
@@ -690,9 +702,9 @@ def get_discussion_history(ticker: str, limit: int = 20) -> dict[str, object]:
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
 )
 def create_report_draft(
-    ticker: str,
-    company_name: str,
-    title: str,
+    ticker: str | None = None,
+    company_name: str = "",
+    title: str = "",
     summary: str | None = None,
     confirm_save: bool = False,
 ) -> dict[str, object]:
@@ -778,10 +790,8 @@ def get_saved_research_report(report_id: str, offset: int = 0, max_chars: int = 
     description="Use this to list ChatGPT-authored saved report versions for a company, including draft/finalized status and links to the previous version.",
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
 )
-def get_saved_report_history(ticker: str, limit: int = 20) -> dict[str, object]:
-    symbol = ticker.upper().strip()
-    if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", symbol):
-        raise ValueError("请输入有效的股票代码，例如 BABA。")
+def get_saved_report_history(ticker: str | None = None, limit: int = 20, company_name: str | None = None) -> dict[str, object]:
+    symbol = _lookup_identity(ticker, company_name)
     return knowledge_service().get_saved_report_history(symbol, limit=limit)
 
 

@@ -44,7 +44,8 @@ class KnowledgeRepository:
         with Session(self.engine) as session:
             company = session.scalar(select(Company).where(Company.ticker == normalized))
             if company is None:
-                company = Company(ticker=normalized, name=name.strip(), exchange=exchange)
+                status = "private" if normalized.startswith("PRIVATE-") else "active"
+                company = Company(ticker=normalized, name=name.strip(), exchange=exchange, status=status)
                 session.add(company)
                 session.commit()
                 session.refresh(company)

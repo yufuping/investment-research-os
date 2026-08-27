@@ -88,6 +88,52 @@ def test_company_memory_tools_use_json_service(monkeypatch):
     assert result == {"query": "CUDA", "ticker": "NVDA", "count": 1, "limit": 5}
 
 
+def test_unlisted_company_uses_stable_private_memory_identity(monkeypatch):
+    calls = []
+
+    class FakeKnowledgeService:
+        def save_discussion_summary(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return {"saved": True, "company_key": args[0]}
+
+        def get_discussion_history(self, ticker, limit=20):
+            return {"found": True, "ticker": ticker, "count": 0, "discussion_summaries": []}
+
+    monkeypatch.setattr(mcp_server, "_knowledge_service", FakeKnowledgeService())
+
+    result = mcp_server.save_discussion_summary(
+        ticker=None,
+        company_name="DeepSeek",
+        title="DeepSeek 讨论",
+        summary="非上市公司的商业模式与竞争力。",
+        confirm_save=True,
+    )
+    key = calls[0][0][0]
+    assert key.startswith("PRIVATE-")
+    assert result["company_key"] == key
+    assert mcp_server.get_discussion_history(company_name="DeepSeek")["ticker"] == key
+    assert mcp_server._private_entity_key(" deepseek ") == key
+
+
+def test_valuation_and_trade_tools_reject_unlisted_company_without_ticker():
+    with pytest.raises(ValueError, match="只适用于上市公司"):
+        mcp_server.save_valuation(
+            ticker=None,
+            company_name="DeepSeek",
+            reference_price=100,
+            confirm_save=True,
+        )
+    with pytest.raises(ValueError, match="只适用于上市公司"):
+        mcp_server.save_confirmed_decision(
+            ticker=None,
+            company_name="DeepSeek",
+            action="持有",
+            core_thesis="测试",
+            confirm_transaction=True,
+            position_weight_pct=1,
+        )
+
+
 def test_memory_write_tools_normalize_inputs(monkeypatch):
     calls = []
 

@@ -29,3 +29,13 @@ def test_remote_database_does_not_auto_create_schema(monkeypatch, tmp_path: Path
 
     assert repository.engine.url.database == str(remote_file)
     assert not remote_file.exists()
+
+
+def test_unlisted_company_is_stored_with_private_status(tmp_path: Path):
+    settings = Settings(bigfish_database_path=tmp_path / "bigfish.db")
+    repository = create_knowledge_repository(settings)
+
+    company = repository.get_or_create_company("PRIVATE-ABC123", "DeepSeek")
+
+    assert company.status == "private"
+    assert company.ticker == "PRIVATE-ABC123"

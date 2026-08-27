@@ -39,7 +39,7 @@ python -m pytest tests/test_knowledge_models.py -q
 
 `KnowledgeRepository` 负责数据库读写，`KnowledgeService` 将结果转换成适合未来 MCP/HTTP 接口使用的 JSON：
 
-- 按股票代码读取公司完整记忆；
+- 按股票代码读取上市公司完整记忆，也可按公司名称读取未上市实体（例如 DeepSeek）；
 - 跨论点、假设、预测、关键未知和跟踪变量搜索；
 - 追加论点并保留版本历史；
 - 保存假设、可证伪预测和关键未知；
@@ -57,6 +57,8 @@ python -m pytest tests/test_knowledge_models.py -q
 - `create_report_draft`、`append_report_section`、`finalize_research_report`、`get_saved_research_report` 和 `get_saved_report_history` 正式研报工具。
 
 后台不调用大模型生成研报。完整研报由当前 ChatGPT 按 Bigfish 方法撰写，用户确认后才分章保存和定稿。
+
+公司主表沿用 `ticker` 作为唯一内部公司键。上市公司使用股票代码；未上市公司由 MCP 根据规范化公司名称生成稳定的 `PRIVATE-...` 内部键，并将 `companies.status` 标记为 `private`。未上市实体可以保存讨论、论点、假设、预测、跟踪变量和研报，但估值和真实交易工具仍要求上市证券代码。
 
 反向估值默认使用五年和13%要求年化回报率。股息率按年化回报贡献处理，属于简化模型；存在可靠逐年分红预测时，应改用逐年现金流计算。
 
