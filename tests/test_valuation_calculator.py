@@ -36,3 +36,21 @@ def test_bigfish_trend_table_requires_operating_profit_growth_and_margin_check()
     assert "经营利润同比增长" in text
     assert "经营利润率 = 经营利润 ÷ 营业收入" in text
     assert "差异超过 0.2 个百分点" in text
+
+
+def test_bigfish_trend_table_includes_net_profit_and_investment_income():
+    path = Path(__file__).parents[1] / "skills" / "bigfish" / "references" / "methodology.md"
+    text = path.read_text(encoding="utf-8")
+    assert "净利润同比增长" in text
+    assert "投资收益" in text
+    assert "投资收益占净利润" in text
+    assert "投资收益与净利润质量" in text
+
+
+def test_bigfish_return_attribution_has_gaap_and_normalized_bridges():
+    path = Path(__file__).parents[1] / "skills" / "bigfish" / "references" / "return-attribution.md"
+    text = path.read_text(encoding="utf-8")
+    assert "规范化分析法" in text
+    assert "GAAP/报告口径分析法" in text
+    assert "规范化总回报倍数" in text
+    assert "报告口径总回报倍数" in text
