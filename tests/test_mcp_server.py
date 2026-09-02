@@ -284,3 +284,50 @@ def test_legacy_report_generation_tools_are_not_exposed():
         "append_report_section",
         "finalize_research_report",
     }.issubset(tool_names)
+    assert {
+        "record_prediction_result",
+        "get_prediction_history",
+        "list_pending_predictions",
+    }.issubset(tool_names)
+
+
+def test_prediction_review_tools_require_confirmation_and_parse_dates(monkeypatch):
+    calls = []
+
+    class FakeKnowledgeService:
+        def save_prediction(self, *args, **kwargs):
+            calls.append(("save", args, kwargs))
+            return {"saved": True, "prediction": {"id": "pred-1"}}
+
+        def get_prediction_history(self, ticker, **kwargs):
+            return {"found": True, "ticker": ticker, "count": 0, "predictions": []}
+
+        def list_pending_predictions(self, **kwargs):
+            return {"count": 0, "predictions": []}
+
+        def record_prediction_result(self, *args, **kwargs):
+            calls.append(("review", args, kwargs))
+            return {"reviewed": True}
+
+    monkeypatch.setattr(mcp_server, "_knowledge_service", FakeKnowledgeService())
+
+    mcp_server.save_prediction(
+        "meta",
+        "Meta Platforms",
+        "CapEx 将上升",
+        expected_verification_date="2027-12-31",
+    )
+    assert calls[0][1][0] == "META"
+    assert calls[0][2]["expected_verification_date"].isoformat() == "2027-12-31"
+
+    assert mcp_server.get_prediction_history(ticker="meta", outcome="pending")["found"] is True
+    assert mcp_server.list_pending_predictions(due_by="2026-01-01")["count"] == 0
+
+    with pytest.raises(PermissionError, match="confirm_review"):
+        mcp_server.record_prediction_result("12345678-1234-5678-1234-567812345678", "实际结果", "wrong")
+
+    assert mcp_server.record_prediction_result(
+        "12345678-1234-5678-1234-567812345678", "实际结果", "wrong", confirm_review=True
+    )["reviewed"] is True
+    assert calls[-1][0] == "review"
+

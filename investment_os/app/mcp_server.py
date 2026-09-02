@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 import hashlib
 import json
 import os
@@ -394,6 +394,15 @@ def _confidence(value: float | None) -> Decimal | None:
     return Decimal(str(value)) if value is not None else None
 
 
+def _parse_optional_date(value: str | None, field_name: str) -> date | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError as exc:
+        raise ValueError(f"{field_name} 必须是 YYYY-MM-DD 格式的日期。") from exc
+
+
 @mcp.tool(
     name="save_thesis",
     title="保存投资论点",
@@ -432,12 +441,91 @@ def save_assumption(ticker: str | None = None, company_name: str = "", descripti
 @mcp.tool(
     name="save_prediction",
     title="保存可验证预测",
-    description="Save a meaningful falsifiable prediction when the user asks to remember or track it. Do not store vague opinions as predictions.",
+    description="Save a meaningful falsifiable prediction when the user asks to remember or track it. Include expected_verification_date (YYYY-MM-DD) when the prediction can be checked on a specific date. Do not store vague opinions as predictions.",
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
 )
-def save_prediction(ticker: str | None = None, company_name: str = "", prediction: str = "", confidence: float | None = None) -> dict[str, object]:
+def save_prediction(
+    ticker: str | None = None,
+    company_name: str = "",
+    prediction: str = "",
+    confidence: float | None = None,
+    expected_verification_date: str | None = None,
+) -> dict[str, object]:
     symbol, name = _memory_identity(ticker, company_name)
-    return knowledge_service().save_prediction(symbol, name, prediction, confidence=_confidence(confidence))
+    return knowledge_service().save_prediction(
+        symbol,
+        name,
+        prediction,
+        confidence=_confidence(confidence),
+        expected_verification_date=_parse_optional_date(expected_verification_date, "expected_verification_date"),
+    )
+
+
+@mcp.tool(
+    name="get_prediction_history",
+    title="读取预测历史",
+    description="Use this to review saved predictions for a company. Optionally filter by outcome: pending, correct, wrong, or partially_correct.",
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+)
+def get_prediction_history(
+    ticker: str | None = None,
+    company_name: str | None = None,
+    outcome: str | None = None,
+    limit: int = 20,
+) -> dict[str, object]:
+    symbol = _lookup_identity(ticker, company_name)
+    normalized_outcome = outcome.strip().lower() if outcome else None
+    if normalized_outcome == "pending":
+        pass
+    elif normalized_outcome in {"correct", "wrong", "partially_correct"}:
+        pass
+    elif normalized_outcome is not None:
+        raise ValueError("outcome 必须是 pending、correct、wrong 或 partially_correct")
+    return knowledge_service().get_prediction_history(symbol, outcome=normalized_outcome, limit=limit)
+
+
+@mcp.tool(
+    name="list_pending_predictions",
+    title="列出待复盘预测",
+    description="List predictions that are still pending review. Optionally filter to one ticker or to predictions due on or before due_by (YYYY-MM-DD).",
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+)
+def list_pending_predictions(
+    ticker: str | None = None,
+    company_name: str | None = None,
+    due_by: str | None = None,
+    limit: int = 50,
+) -> dict[str, object]:
+    symbol = _lookup_identity(ticker, company_name) if ticker or company_name else None
+    return knowledge_service().list_pending_predictions(
+        ticker=symbol,
+        due_by=_parse_optional_date(due_by, "due_by"),
+        limit=limit,
+    )
+
+
+@mcp.tool(
+    name="record_prediction_result",
+    title="记录预测复盘结果",
+    description="Record the actual outcome after a falsifiable prediction can be verified. Requires confirm_review=true and explicit user confirmation that the review is accurate. Outcome must be correct, wrong, or partially_correct.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+)
+def record_prediction_result(
+    prediction_id: str,
+    actual_result: str,
+    outcome: str,
+    error_reason: str | None = None,
+    confirm_review: bool = False,
+) -> dict[str, object]:
+    if not confirm_review:
+        raise PermissionError("必须设置 confirm_review=true，并在用户确认复盘结论准确后才能记录预测结果。")
+    return knowledge_service().record_prediction_result(
+        UUID(prediction_id),
+        actual_result,
+        outcome,
+        error_reason=error_reason,
+        explicit_user_confirmation=True,
+    )
 
 
 @mcp.tool(

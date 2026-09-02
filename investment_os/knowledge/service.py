@@ -68,10 +68,91 @@ class KnowledgeService:
         item = self.repository.save_assumption(company.id, description, impact, confidence=confidence)
         return {"saved": True, "ticker": company.ticker, "assumption": serialize(item)}
 
-    def save_prediction(self, ticker: str, company_name: str, prediction: str, *, confidence: Decimal | None = None) -> dict[str, Any]:
+    def save_prediction(
+        self,
+        ticker: str,
+        company_name: str,
+        prediction: str,
+        *,
+        confidence: Decimal | None = None,
+        expected_verification_date: date | None = None,
+    ) -> dict[str, Any]:
         company = self.repository.get_or_create_company(ticker, company_name)
-        item = self.repository.save_prediction(company.id, prediction, confidence=confidence)
+        item = self.repository.save_prediction(
+            company.id,
+            prediction,
+            confidence=confidence,
+            expected_verification_date=expected_verification_date,
+        )
         return {"saved": True, "ticker": company.ticker, "prediction": serialize(item)}
+
+    def get_prediction_history(
+        self,
+        ticker: str,
+        *,
+        outcome: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        company = self.repository.get_company(ticker)
+        if company is None:
+            return {"found": False, "ticker": ticker.upper().strip(), "count": 0, "predictions": []}
+        items = self.repository.list_prediction_history(company.id, outcome=outcome, limit=limit)
+        pending = sum(1 for item in items if item.outcome == "pending")
+        reviewed = len(items) - pending
+        return {
+            "found": True,
+            "ticker": company.ticker,
+            "company_name": company.name,
+            "count": len(items),
+            "pending_count": pending,
+            "reviewed_count": reviewed,
+            "predictions": serialize(items),
+        }
+
+    def list_pending_predictions(
+        self,
+        *,
+        ticker: str | None = None,
+        due_by: date | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        rows = self.repository.list_pending_predictions(ticker=ticker, due_by=due_by, limit=limit)
+        return {
+            "count": len(rows),
+            "due_by": str(due_by) if due_by else None,
+            "predictions": [
+                {
+                    "ticker": serialize(row["company"])["ticker"],
+                    "company_name": serialize(row["company"])["name"],
+                    **serialize(row["prediction"]),
+                }
+                for row in rows
+            ],
+        }
+
+    def record_prediction_result(
+        self,
+        prediction_id: UUID,
+        actual_result: str,
+        outcome: str,
+        *,
+        error_reason: str | None = None,
+        explicit_user_confirmation: bool,
+    ) -> dict[str, Any]:
+        item = self.repository.record_prediction_result(
+            prediction_id,
+            actual_result,
+            outcome,
+            error_reason=error_reason,
+            explicit_user_confirmation=explicit_user_confirmation,
+        )
+        company = self.repository.get_company_by_id(item.company_id)
+        ticker = company.ticker if company else None
+        return {
+            "reviewed": True,
+            "ticker": ticker,
+            "prediction": serialize(item),
+        }
 
     def save_critical_unknown(self, ticker: str, company_name: str, description: str, impact: str, *, confidence: Decimal | None = None) -> dict[str, Any]:
         company = self.repository.get_or_create_company(ticker, company_name)
