@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -56,6 +56,13 @@ class KnowledgeRepository:
         normalized = ticker.upper().strip()
         with Session(self.engine) as session:
             company = session.scalar(select(Company).where(Company.ticker == normalized))
+            if company is not None:
+                session.expunge(company)
+            return company
+
+    def get_company_by_id(self, company_id: UUID) -> Company | None:
+        with Session(self.engine) as session:
+            company = session.get(Company, company_id)
             if company is not None:
                 session.expunge(company)
             return company
@@ -131,7 +138,7 @@ class KnowledgeRepository:
         prediction: str,
         *,
         confidence: Decimal | None = None,
-        expected_verification_date=None,
+        expected_verification_date: date | None = None,
     ) -> Prediction:
         return self._save_company_item(
             Prediction,
@@ -140,6 +147,99 @@ class KnowledgeRepository:
             confidence=self._validate_confidence(confidence),
             expected_verification_date=expected_verification_date,
         )
+
+    def get_prediction(self, prediction_id: UUID) -> Prediction | None:
+        with Session(self.engine) as session:
+            item = session.get(Prediction, prediction_id)
+            if item is not None:
+                session.expunge(item)
+            return item
+
+    def list_prediction_history(
+        self,
+        company_id: UUID,
+        *,
+        outcome: str | None = None,
+        limit: int = 20,
+    ) -> list[Prediction]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit 必须在 1 到 100 之间")
+        with Session(self.engine) as session:
+            query = select(Prediction).where(Prediction.company_id == company_id)
+            if outcome is not None:
+                query = query.where(Prediction.outcome == outcome.strip())
+            items = list(session.scalars(query.order_by(Prediction.prediction_date.desc(), Prediction.created_at.desc()).limit(limit)))
+            for item in items:
+                session.expunge(item)
+            return items
+
+    def list_pending_predictions(
+        self,
+        *,
+        ticker: str | None = None,
+        due_by: date | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit 必须在 1 到 100 之间")
+        with Session(self.engine) as session:
+            query = (
+                select(Prediction, Company)
+                .join(Company, Prediction.company_id == Company.id)
+                .where(Prediction.outcome == "pending")
+            )
+            if ticker:
+                query = query.where(Company.ticker == ticker.upper().strip())
+            if due_by is not None:
+                query = query.where(
+                    Prediction.expected_verification_date.is_not(None),
+                    Prediction.expected_verification_date <= due_by,
+                )
+            rows = list(session.execute(query.order_by(Prediction.expected_verification_date.asc().nulls_last(), Prediction.created_at.asc()).limit(limit)))
+            results: list[dict[str, object]] = []
+            expunged_companies: set[UUID] = set()
+            expunged_predictions: set[UUID] = set()
+            for prediction, company in rows:
+                if prediction.id not in expunged_predictions:
+                    session.expunge(prediction)
+                    expunged_predictions.add(prediction.id)
+                if company.id not in expunged_companies:
+                    session.expunge(company)
+                    expunged_companies.add(company.id)
+                results.append({"company": company, "prediction": prediction})
+            return results
+
+    def record_prediction_result(
+        self,
+        prediction_id: UUID,
+        actual_result: str,
+        outcome: str,
+        *,
+        error_reason: str | None = None,
+        explicit_user_confirmation: bool,
+    ) -> Prediction:
+        if not explicit_user_confirmation:
+            raise PermissionError("没有用户明确确认，不得记录预测复盘结果")
+        normalized_outcome = outcome.strip().lower()
+        allowed = {"correct", "wrong", "partially_correct"}
+        if normalized_outcome not in allowed:
+            raise ValueError("复盘结果必须是 correct、wrong 或 partially_correct")
+        if not actual_result.strip():
+            raise ValueError("实际结果不能为空")
+        with Session(self.engine) as session:
+            item = session.get(Prediction, prediction_id)
+            if item is None:
+                raise LookupError("找不到对应预测")
+            if item.outcome != "pending":
+                raise ValueError("该预测已经复盘，不能重复覆盖")
+            item.actual_result = actual_result.strip()
+            item.outcome = normalized_outcome
+            item.error_reason = error_reason.strip() if error_reason else None
+            item.reviewed_at = datetime.now(UTC)
+            session.commit()
+            session.refresh(item)
+            session.expunge(item)
+            return item
 
     def save_critical_unknown(
         self,
